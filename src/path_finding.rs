@@ -203,27 +203,29 @@ fn render_path(
             0.2,
             Color::linear_rgb(0., 1., 0.),
         );
-        let Some(next) = map.get_by_id(&next.0) else {
-            continue;
-        };
-        let Ok(next) = cells.get(next) else {
-            continue;
-        };
-        gizmo.sphere(
-            Isometry3d::from_translation(next.translation + Vec3::Y),
-            0.2,
-            Color::linear_rgb(1., 1., 0.),
-        );
-        let mut line = vec![pos.translation() + Vec3::Y, next.translation + Vec3::Y];
-        for segment in path.0.iter() {
-            let Some(next) = map.get_by_id(segment) else {
+        if let Some(target) = next.0 {
+            let Some(next) = map.get_by_id(&target) else {
                 continue;
             };
             let Ok(next) = cells.get(next) else {
                 continue;
             };
-            line.push(next.translation + Vec3::Y);
+            gizmo.sphere(
+                Isometry3d::from_translation(next.translation + Vec3::Y),
+                0.2,
+                Color::linear_rgb(1., 1., 0.),
+            );
+            let mut line = vec![pos.translation() + Vec3::Y, next.translation + Vec3::Y];
+            for segment in path.0.iter() {
+                let Some(next) = map.get_by_id(segment) else {
+                    continue;
+                };
+                let Ok(next) = cells.get(next) else {
+                    continue;
+                };
+                line.push(next.translation + Vec3::Y);
+            }
+            gizmo.linestrip(line, bevy::color::palettes::css::RED);
         }
-        gizmo.linestrip(line, bevy::color::palettes::css::RED);
     }
 }

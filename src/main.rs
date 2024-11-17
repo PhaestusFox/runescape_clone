@@ -165,7 +165,7 @@ fn ray_casting(
     mut clicks: EventReader<Pointer<Click>>,
     terrain: Query<(), With<Terrain>>,
     cells: Query<&MoveCost, With<Cell>>,
-    mut player: Query<(&mut Path, &mut TargetCell), With<Player>>,
+    mut player: Query<(&mut Path, &TargetCell, &PastCell), With<Player>>,
     map: Res<CellIdToEntity>,
 
     mut color_cells: Query<(&mut MeshMaterial3d<StandardMaterial>, &MoveCost)>,
@@ -197,13 +197,18 @@ fn ray_casting(
             continue;
         }
 
-        let Ok((mut path, target)) = player.get_single_mut() else {
+        let Ok((mut path, target, past)) = player.get_single_mut() else {
             error!("No Player");
             return;
         };
 
-        let Some((new_path, check)) = path_finding::a_star_debug(target.0, cell, &cells, &map)
-        else {
+        let start = if let Some(next) = target.0 {
+            next
+        } else {
+            past.cell
+        };
+
+        let Some((new_path, check)) = path_finding::a_star_debug(start, cell, &cells, &map) else {
             error!("path find failed");
             continue;
         };
@@ -288,7 +293,7 @@ fn spawn_character(mut commands: Commands, asset_server: Res<AssetServer>) {
 struct Player;
 
 #[derive(Component, Default)]
-struct TargetCell(IVec3);
+struct TargetCell(Option<IVec3>);
 
 #[derive(Component, Default)]
 struct PastCell {
@@ -314,34 +319,47 @@ fn move_entity(
     >,
     cells: Query<&Transform, With<Cell>>,
     map: Res<CellIdToEntity>,
-    gloabl: Query<&GlobalTransform, With<Cell>>,
 ) {
     for (mut pos, mut target, mut past, mut next, mut animation) in &mut entities {
-        if target.0 == past.cell {
-            if let Some(next) = next.0.pop_front() {
-                target.0 = next;
-                if *animation != Animation::Walk {
-                    *animation = Animation::Walk;
-                }
-                continue;
-            } else if *animation != Animation::Idle {
-                *animation = Animation::Idle;
-            };
+        if target.0.is_none() && !next.0.is_empty() {
+            target.0 = next.0.pop_front();
         }
-        let Some(target_e) = map.get_by_id(&target.0) else {
-            warn!("Target ({}) not in map", target.0);
+        let Some(target_cell) = target.0 else {
             continue;
         };
-        let Ok(target_pos) = cells.get(target_e).cloned() else {
-            warn!("Target ({}) not is not an entity", target.0);
+        let Some(target_e) = map.get_by_id(&target_cell) else {
+            warn!("Target ({}) not in map", target_cell);
+            continue;
+        };
+        let Ok(mut target_pos) = cells.get(target_e).cloned() else {
+            warn!("Target ({}) not is not an entity", target_cell);
             continue;
         };
         let current = pos.translation;
-
         if current.distance_squared(target_pos.translation) < 0.001 {
-            past.cell = target.0;
-            past.start_time = time.elapsed_secs();
-            continue;
+            past.cell = target_cell;
+            if let Some(next) = next.0.pop_front() {
+                past.start_time = time.elapsed_secs();
+                target.0 = Some(next);
+                let Some(target_e) = map.get_by_id(&next) else {
+                    warn!("Target ({}) not in map", next);
+                    continue;
+                };
+                let Ok(next_pos) = cells.get(target_e).cloned() else {
+                    warn!("Target ({}) not is not an entity", next);
+                    continue;
+                };
+                target_pos = next_pos;
+                if *animation != Animation::Walk {
+                    *animation = Animation::Walk;
+                }
+            } else {
+                target.0 = None;
+                if *animation != Animation::Idle {
+                    *animation = Animation::Idle;
+                }
+                continue;
+            };
         }
 
         let Some(past_e) = map.get_by_id(&past.cell) else {
@@ -355,91 +373,29 @@ fn move_entity(
 
         let target = past_pos.translation.lerp(
             target_pos.translation,
-            (time.elapsed_secs() - past.start_time).clamp(0., 1.),
+            ((time.elapsed_secs() - past.start_time) * 10.).clamp(0., 0.999),
         );
         pos.translation = target;
-
-        let Ok(g_pos) = gloabl.get(target_e).cloned() else {
-            continue;
-        };
         pos.look_at(target_pos.translation, Vec3::Y);
         pos.rotate_local_y(f32::consts::PI);
     }
 }
 
-fn color_target(
-    cell_map: Res<CellIdToEntity>,
-    mut cells: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    targeting: Query<&TargetCell, Changed<TargetCell>>,
-    assets: Res<CellAssets>,
-) {
-    for target in &targeting {
-        let Some(id) = cell_map.id_to_entity.get(&target.0).copied() else {
-            error!("Cell({}) not in map", target.0);
-            continue;
-        };
-        let Ok(mut cell) = cells.get_mut(id) else {
-            error!("Cell({}) Entity({}) missing material", target.0, id);
-            continue;
-        };
-        cell.0 = assets.target_material.clone();
-    }
-}
-
-fn color_path(
-    cell_map: Res<CellIdToEntity>,
-    mut cells: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    targeting: Query<&Path, Changed<Path>>,
-    assets: Res<CellAssets>,
-) {
-    for target in &targeting {
-        for target in target.0.iter() {
-            let Some(id) = cell_map.id_to_entity.get(target).copied() else {
-                error!("Cell({}) not in map", target);
-                continue;
-            };
-            let Ok(mut cell) = cells.get_mut(id) else {
-                error!("Cell({}) Entity({}) missing material", target, id);
-                continue;
-            };
-            cell.0 = assets.path_material.clone();
-        }
-    }
-}
-
-fn clear_color(
-    cell_map: Res<CellIdToEntity>,
-    mut cells: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    targeting: Query<&PastCell, Changed<PastCell>>,
-    assets: Res<CellAssets>,
-) {
-    for target in &targeting {
-        let Some(id) = cell_map.id_to_entity.get(&target.cell).copied() else {
-            error!("Cell({}) not in map", target.cell);
-            continue;
-        };
-        let Ok(mut cell) = cells.get_mut(id) else {
-            error!("Cell({}) Entity({}) missing material", target.cell, id);
-            continue;
-        };
-        cell.0 = assets.normal_material.clone();
-    }
-}
-
 fn random_move(
-    mut entities: Query<(&mut Path, &TargetCell), (Changed<Path>, Without<Player>)>,
+    mut entities: Query<(&mut Path, &TargetCell, &PastCell), Without<Player>>,
     cells: Query<&MoveCost, With<Cell>>,
     map: Res<CellIdToEntity>,
 ) {
-    for (mut path, next) in &mut entities {
-        if path.0.is_empty() {
+    for (mut path, next, past) in &mut entities {
+        if next.0.is_none() {
             let Some(new_path) = path_finding::a_star(
-                next.0,
-                IVec3::new(
-                    rand::thread_rng().gen_range(-50..50),
-                    0,
-                    rand::thread_rng().gen_range(-50..50),
-                ),
+                past.cell,
+                past.cell
+                    + IVec3::new(
+                        rand::thread_rng().gen_range(-10..10),
+                        0,
+                        rand::thread_rng().gen_range(-10..10),
+                    ),
                 &cells,
                 &map,
             ) else {

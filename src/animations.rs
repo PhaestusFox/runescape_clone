@@ -137,7 +137,6 @@ pub fn bubble_animation(
     for (root, animation) in &animation {
         for child in children.iter_descendants(root) {
             if let Ok(mut player) = players.get_mut(child) {
-                print!("{}, ", child);
                 *player = *animation;
             }
         }
