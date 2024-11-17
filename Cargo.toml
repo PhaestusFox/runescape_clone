@@ -1,0 +1,17 @@
+[package]
+name = "runescape_clone"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = {version = "=0.15.0-rc.3", features = ["bevy_picking"]}
+rand = "*"
+indexmap = "*"
+noise = "*"
+
+[lints.clippy]
+type_complexity = "allow"
+# ​​type_complexity = "allow"
+
+[profile.dev.package."*"]
+opt-level = 3
