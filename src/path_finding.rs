@@ -6,6 +6,8 @@ use indexmap::IndexSet;
 
 use crate::{CellIdToEntity, PastCell, Path, TargetCell};
 
+const MAX_STEPS: usize = 10000;
+
 const NEIGHBORS: [(IVec3, f32); 8] = [
     (IVec3::new(0, 0, 1), 2.),     // up
     (IVec3::new(-1, 0, 0), 2.),    // left
@@ -59,7 +61,9 @@ pub fn a_star<T: bevy::ecs::query::QueryFilter>(
     f_score.insert(start, 0.);
     let end_f32 = end.as_vec3();
     // let mut checked = HashSet::default();
+    let mut step = 0;
     while !open.is_empty() {
+        step += 1;
         open.sort_by(|a, b| {
             f_score
                 .get(b)
@@ -98,6 +102,9 @@ pub fn a_star<T: bevy::ecs::query::QueryFilter>(
                 open.insert(n);
             }
         }
+        if step > MAX_STEPS {
+            return None;
+        }
     }
     None
 }
@@ -119,7 +126,9 @@ pub fn a_star_debug<T: bevy::ecs::query::QueryFilter>(
     f_score.insert(start, 0.);
     let end_f32 = end.as_vec3();
     let mut checked = HashSet::default();
+    let mut step = 0;
     while !open.is_empty() {
+        step += 1;
         open.sort_by(|a, b| {
             f_score
                 .get(b)
@@ -158,6 +167,9 @@ pub fn a_star_debug<T: bevy::ecs::query::QueryFilter>(
                 f_score.insert(n, tentative_g + n.as_vec3().distance(end_f32) * 3.);
                 open.insert(n);
             }
+        }
+        if step > MAX_STEPS {
+            return None;
         }
     }
     None
