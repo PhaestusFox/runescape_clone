@@ -1,7 +1,7 @@
-use core::{f32, f64};
+use core::f32;
 
 use animations::Animation;
-use bevy::{core_pipeline::experimental::taa, prelude::*, utils::HashMap};
+use bevy::{ecs::system::SystemId, prelude::*, utils::HashMap};
 use path_finding::MoveCost;
 use rand::{seq::SliceRandom, Rng};
 use terrain::Terrain;
@@ -23,10 +23,17 @@ fn main() {
                 ray_casting,
                 move_entity,
                 update_cells,
-                terrain::add_terrain_mesh,
+                add_root,
+                build_path,
+                run_player_action,
             ),
         )
-        .add_plugins((animations::plugin, path_finding::plugin));
+        .add_plugins((
+            animations::plugin,
+            path_finding::plugin,
+            terrain::plugin,
+            ui::plugin,
+        ));
     #[cfg(debug_assertions)]
     app.add_systems(FixedUpdate, random_move)
         .insert_resource(Time::<Fixed>::from_hz(1.));
@@ -34,6 +41,8 @@ fn main() {
     // .add_plugins(Picki);
     app.run();
 }
+
+mod ui;
 
 #[derive(Resource)]
 struct CellAssets {
@@ -161,17 +170,25 @@ fn spawn_map(mut commands: Commands, assets: Res<CellAssets>, asset_server: Res<
     ));
 }
 
+#[derive(Component)]
+struct Root;
+
+fn add_root(mut commands: Commands, scenes: Query<Entity, Added<SceneRoot>>) {
+    for entity in &scenes {
+        commands.entity(entity).insert(Root);
+    }
+}
+
 fn ray_casting(
+    mut commands: Commands,
     mut clicks: EventReader<Pointer<Click>>,
     terrain: Query<(), With<Terrain>>,
-    cells: Query<&MoveCost, With<Cell>>,
-    mut player: Query<(&mut Path, &TargetCell, &PastCell), With<Player>>,
-    map: Res<CellIdToEntity>,
-
-    mut color_cells: Query<(&mut MeshMaterial3d<StandardMaterial>, &MoveCost)>,
-    assets: Res<CellAssets>,
+    player: Query<Entity, With<Player>>,
 ) {
     for click in clicks.read() {
+        if click.button != PointerButton::Primary {
+            continue;
+        }
         if !terrain.contains(click.target) {
             continue;
         }
@@ -183,8 +200,34 @@ fn ray_casting(
             error!("Click has no position data");
             continue;
         };
-        let Some(cell_e) = map.get_by_id(&cell) else {
-            warn!("Cell ({}) not in map", cell);
+        let player = player.single();
+        commands.entity(player).insert(Target(cell));
+    }
+}
+
+#[derive(Component, Clone, Copy)]
+struct Action(SystemId);
+
+fn run_player_action(world: &mut World) {
+    let actions = world
+        .query::<&Action>()
+        .iter(world)
+        .cloned()
+        .collect::<Vec<_>>();
+    for action in &actions {
+        world.run_system(action.0).unwrap();
+    }
+}
+
+fn build_path(
+    mut commands: Commands,
+    cells: Query<&MoveCost, With<Cell>>,
+    mut path_finder: Query<(Entity, &mut Path, &Target, &NextCell, &PastCell)>,
+    map: Res<CellIdToEntity>,
+) {
+    for (entity, mut path, target, next, past) in &mut path_finder {
+        let Some(cell_e) = map.get_by_id(&target.0) else {
+            warn!("Cell ({}) not in map", target.0);
             continue;
         };
         if let Ok(cost) = cells.get(cell_e) {
@@ -197,56 +240,22 @@ fn ray_casting(
             continue;
         }
 
-        let Ok((mut path, target, past)) = player.get_single_mut() else {
-            error!("No Player");
-            return;
-        };
-
-        let start = if let Some(next) = target.0 {
+        let start = if let Some(next) = next.0 {
             next
         } else {
             past.cell
         };
 
-        let Some((new_path, check)) = path_finding::a_star_debug(start, cell, &cells, &map) else {
+        let Some((new_path, check)) = path_finding::a_star_debug(start, target.0, &cells, &map)
+        else {
             error!("path find failed");
+            commands.entity(entity).remove::<Target>();
             continue;
         };
 
-        for (mut cell, cost) in &mut color_cells {
-            cell.0 = if cost.0 > 100. {
-                assets.solid.clone_weak()
-            } else if cost.0 > 2. {
-                assets.slow.clone_weak()
-            } else if cost.0 < 2. {
-                assets.path_material.clone_weak()
-            } else {
-                assets.normal_material.clone_weak()
-            };
-        }
-
-        for checked in check {
-            let Some(entity) = map.id_to_entity.get(&checked) else {
-                continue;
-            };
-            let Ok((mut cell, _)) = color_cells.get_mut(*entity) else {
-                continue;
-            };
-            cell.0 = assets.checked.clone_weak();
-        }
-
-        for checked in new_path.iter() {
-            let Some(entity) = map.id_to_entity.get(checked) else {
-                continue;
-            };
-            let Ok((mut cell, _)) = color_cells.get_mut(*entity) else {
-                continue;
-            };
-            cell.0 = assets.path_material.clone_weak();
-        }
-
         path.0.clear();
         path.0.extend(new_path);
+        commands.entity(entity).remove::<Target>();
     }
 }
 
@@ -293,7 +302,10 @@ fn spawn_character(mut commands: Commands, asset_server: Res<AssetServer>) {
 struct Player;
 
 #[derive(Component, Default)]
-struct TargetCell(Option<IVec3>);
+struct NextCell(Option<IVec3>);
+
+#[derive(Component)]
+struct Target(IVec3);
 
 #[derive(Component, Default)]
 struct PastCell {
@@ -302,7 +314,7 @@ struct PastCell {
 }
 
 #[derive(Component, Default)]
-#[require(TargetCell, PastCell)]
+#[require(NextCell, PastCell)]
 struct Path(std::collections::VecDeque<IVec3>);
 
 fn move_entity(
@@ -310,7 +322,7 @@ fn move_entity(
     mut entities: Query<
         (
             &mut Transform,
-            &mut TargetCell,
+            &mut NextCell,
             &mut PastCell,
             &mut Path,
             &mut Animation,
@@ -382,27 +394,19 @@ fn move_entity(
 }
 
 fn random_move(
-    mut entities: Query<(&mut Path, &TargetCell, &PastCell), Without<Player>>,
-    cells: Query<&MoveCost, With<Cell>>,
-    map: Res<CellIdToEntity>,
+    mut commands: Commands,
+    entities: Query<(&NextCell, &PastCell, Entity), Without<Player>>,
 ) {
-    for (mut path, next, past) in &mut entities {
+    for (next, past, entity) in &entities {
         if next.0.is_none() {
-            let Some(new_path) = path_finding::a_star(
-                past.cell,
+            commands.entity(entity).insert(Target(
                 past.cell
                     + IVec3::new(
                         rand::thread_rng().gen_range(-10..10),
                         0,
                         rand::thread_rng().gen_range(-10..10),
                     ),
-                &cells,
-                &map,
-            ) else {
-                error!("Failed to find path");
-                continue;
-            };
-            path.0.extend(new_path);
+            ));
         }
     }
 }

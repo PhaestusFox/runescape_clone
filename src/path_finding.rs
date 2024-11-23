@@ -4,7 +4,7 @@ use bevy::{
 };
 use indexmap::IndexSet;
 
-use crate::{CellIdToEntity, PastCell, Path, TargetCell};
+use crate::{CellIdToEntity, NextCell, PastCell, Path};
 
 const MAX_STEPS: usize = 10000;
 
@@ -186,7 +186,7 @@ fn reconstruct_path(mut current: IVec3, path: HashMap<IVec3, IVec3>) -> Vec<IVec
 }
 
 fn render_path(
-    paths: Query<(&GlobalTransform, &Path, &TargetCell, &PastCell)>,
+    paths: Query<(&GlobalTransform, &Path, &NextCell, &PastCell)>,
     cells: Query<&Transform>,
     mut gizmo: Gizmos,
     map: Res<CellIdToEntity>,

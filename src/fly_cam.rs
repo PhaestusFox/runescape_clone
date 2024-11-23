@@ -69,14 +69,16 @@ fn player_look(
 ) {
     let delta: Vec2 = input.read().map(|v| v.delta).sum();
     if let Ok(window) = primary_window.get_single() {
-        for mut transform in query.iter_mut() {
-            let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
-            let window_scale = window.height().min(window.width());
-            pitch -= (settings.mouse_sensitivity * delta.y * window_scale).to_radians();
-            pitch = pitch.clamp(-f32::consts::PI / 2., f32::consts::PI / 2.);
-            yaw -= (settings.mouse_sensitivity * delta.x * window_scale).to_radians();
-            transform.rotation =
-                Quat::from_axis_angle(Vec3::Y, yaw) * Quat::from_axis_angle(Vec3::X, pitch);
+        if window.cursor_options.grab_mode != CursorGrabMode::None {
+            for mut transform in query.iter_mut() {
+                let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+                let window_scale = window.height().min(window.width());
+                pitch -= (settings.mouse_sensitivity * delta.y * window_scale).to_radians();
+                pitch = pitch.clamp(-f32::consts::PI / 2., f32::consts::PI / 2.);
+                yaw -= (settings.mouse_sensitivity * delta.x * window_scale).to_radians();
+                transform.rotation =
+                    Quat::from_axis_angle(Vec3::Y, yaw) * Quat::from_axis_angle(Vec3::X, pitch);
+            }
         }
     } else {
         warn!("Primary window not found for `player_look`!");
